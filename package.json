@@ -1,0 +1,19 @@
+{
+  "name": "rays",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "gl-matrix": "^3.4.3"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.34",
+    "esbuild": "^0.18.18",
+    "typescript": "^5.1.6"
+  }
+}
