@@ -274,13 +274,13 @@ export class BVH {
             triangle_buffer[ptr * TRI_SIZE + 1 ] = tri.v0[1];
             triangle_buffer[ptr * TRI_SIZE + 2 ] = tri.v0[2];
             triangle_buffer[ptr * TRI_SIZE + 3 ] = tri.emit_color[0];
-            triangle_buffer[ptr * TRI_SIZE + 4 ] = tri.v1[0];
-            triangle_buffer[ptr * TRI_SIZE + 5 ] = tri.v1[1];
-            triangle_buffer[ptr * TRI_SIZE + 6 ] = tri.v1[2];
+            triangle_buffer[ptr * TRI_SIZE + 4 ] = tri.v1[0] - tri.v0[0];
+            triangle_buffer[ptr * TRI_SIZE + 5 ] = tri.v1[1] - tri.v0[1];
+            triangle_buffer[ptr * TRI_SIZE + 6 ] = tri.v1[2] - tri.v0[2];
             triangle_buffer[ptr * TRI_SIZE + 7 ] = tri.emit_color[1];
-            triangle_buffer[ptr * TRI_SIZE + 8 ] = tri.v2[0];
-            triangle_buffer[ptr * TRI_SIZE + 9 ] = tri.v2[1];
-            triangle_buffer[ptr * TRI_SIZE + 10] = tri.v2[2];
+            triangle_buffer[ptr * TRI_SIZE + 8 ] = tri.v2[0] - tri.v0[0];
+            triangle_buffer[ptr * TRI_SIZE + 9 ] = tri.v2[1] - tri.v0[1];
+            triangle_buffer[ptr * TRI_SIZE + 10] = tri.v2[2] - tri.v0[2];
             triangle_buffer[ptr * TRI_SIZE + 11] = tri.emit_color[2];
         }
 

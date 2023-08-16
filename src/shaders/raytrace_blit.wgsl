@@ -30,7 +30,9 @@ fn luminance(color: vec3f) -> f32 {
 @fragment
 fn fragment_main(data: VertexOut) -> @location(0) vec4f {
     let iuv = vec2u(data.uv * vec2f(f32(framebuffer.width), f32(framebuffer.height)));
-    let sample = framebuffer.pixels[iuv.x + iuv.y * framebuffer.width];
+    let sample0 = framebuffer.pixels[iuv.x + iuv.y * framebuffer.width];
+
+    let sample = sample0;
     let color = sample.xyz/sample.w;
     let l = luminance(color);
     let tone_mappeed = color / (l + 1);

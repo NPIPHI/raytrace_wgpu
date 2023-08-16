@@ -29,8 +29,8 @@ struct BVHNode {
 
 struct Triangle {
     v0: vec3f, emit_r: f32,
-    v1: vec3f, emit_g: f32,
-    v2: vec3f, emit_b: f32,
+    edge0: vec3f, emit_g: f32,
+    edge1: vec3f, emit_b: f32,
 }
 
 struct FrameBuffer {
@@ -65,10 +65,10 @@ fn main(
     if(settings.dirty == 1){
         framebuffer.pixels[global_id.x + framebuffer.width * global_id.y] = vec4f(0);
     }
-
-    //if((global_id.x / 8 + global_id.y / 8 + settings.frame_count) % 16 != 0){
-    //    return;
-    //}
+    
+    if((global_id.x / 8 + global_id.y / 8 + settings.frame_count) % 8 != 0){
+        return;
+    }
 
     seed_rng(global_id.xy);
 
@@ -95,7 +95,7 @@ fn compute_color(global_id: vec2u) -> vec4f {
     var color = vec3f(0,0,0);
     var absorption = vec3f(1,1,1);
 
-    for(var i = 0; i < 4; i++){
+    for(var i = 0; i < 3; i++){
         let hit = nearest_intersect_bvh(pos, dir);
         if(hit.hit) {
             let tri = bvh_triangles[hit.tri_id];
@@ -158,26 +158,13 @@ fn rand_sphere_hemisphere(dir: vec3f) -> vec3f {
     }
 }
 
-fn nearest_intersect(ray_origin: vec3f, ray_vec: vec3f) -> RayIntersect {
-    var hit: RayIntersect;
-    let triangle_ct = arrayLength(&bvh_triangles);
-    for(var i = 0u; i < triangle_ct; i++){
-        let inter = ray_tri_intersect(ray_origin, ray_vec, bvh_triangles[i]);
-        if(inter.hit && (!hit.hit || inter.dist < hit.dist)){
-            hit = inter;
-            hit.tri_id = i;
-        }
-    }
-    return hit;
-}
-
 fn nearest_intersect_bvh_leaf(leaf: BVHNode, ray_origin: vec3f, ray_vec: vec3f) -> RayIntersect {
     let ct = leaf.tri_count;
     let ptr = leaf.right_ptr;
 
     var hit: RayIntersect;
     for(var i = ptr; i < ptr + ct; i++){
-        let inter = ray_tri_intersect(ray_origin, ray_vec, bvh_triangles[i]);
+        let inter = ray_tri_intersect2(ray_origin, ray_vec, bvh_triangles[i]);
         if(inter.hit && (!hit.hit || inter.dist < hit.dist)){
             hit = inter;
             hit.tri_id = u32(i);
@@ -187,7 +174,7 @@ fn nearest_intersect_bvh_leaf(leaf: BVHNode, ray_origin: vec3f, ray_vec: vec3f) 
 }
 
 fn nearest_intersect_bvh(ray_origin: vec3f, ray_vec: vec3f) -> RayIntersect {
-    var stack = array<u32, 32>();
+    var stack = array<u32, 20>();
     var stack_ptr = 0;
     let inv_v = 1.0 / ray_vec;
     let sign = vec3i(ray_vec < vec3f(0));
@@ -226,7 +213,38 @@ fn nearest_intersect_bvh(ray_origin: vec3f, ray_vec: vec3f) -> RayIntersect {
     return best_hit;
 }
 
+fn ray_tri_intersect2(ray_origin: vec3f, ray_vec: vec3f, tri: Triangle) -> RayIntersect {
+    const EPSILON = 0.0001;
+    let h = cross(ray_vec, tri.edge1);
+    let a = dot(tri.edge0, h);
+    if(a > -EPSILON && a < EPSILON){
+        return RayIntersect();
+    }
 
+    let f = 1.0 / a;
+    let s = ray_origin - tri.v0;
+    let u = f * dot(s, h);
+
+    if(u < 0.0 || u > 1.0){
+        return RayIntersect();
+    }
+
+    let q = cross(s, tri.edge0);
+    let v = f * dot(ray_vec, q);
+
+    if(v < 0.0 || u + v > 1.0){
+        return RayIntersect();
+    }
+
+    let t = f * dot(tri.edge1, q);
+    if(t > EPSILON) {
+        return RayIntersect(normalize(cross(tri.edge0, tri.edge1)), t, true, 0);
+    } else {
+        return RayIntersect();
+    }
+}
+
+/*
 fn ray_tri_intersect(ray_origin: vec3f, ray_vec: vec3f, tri: Triangle) -> RayIntersect {
     const EPSILON = 0.0001;
     let edge1 = tri.v1 - tri.v0;
@@ -259,6 +277,7 @@ fn ray_tri_intersect(ray_origin: vec3f, ray_vec: vec3f, tri: Triangle) -> RayInt
         return RayIntersect();
     }
 }
+*/
 
 
 fn ray_cube_intersect(ray_origin: vec3f, ray_vec: vec3f, inv_ray_vec: vec3f, sign: vec3i, cube_min: vec3f, cube_max: vec3f, max_dist: f32) -> bool {

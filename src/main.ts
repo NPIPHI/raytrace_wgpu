@@ -22,7 +22,6 @@ async function main(){
     let frame_ct = 0;
     let last_fps_poll = 0;
     const run = (time: number)=>{
-        requestAnimationFrame(run);
         let dt = (time - last_time) / 1000;
         last_time = time;
 
@@ -38,6 +37,7 @@ async function main(){
         camera.update(dt)
         app.set_camera(camera)
         app.draw();
+        requestAnimationFrame(run);
     }
     requestAnimationFrame(run);
 

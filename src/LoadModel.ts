@@ -24,7 +24,8 @@ export async function load_model(path: string): Promise<Triangle[]> {
     const TRI_SIZE = 8;
     for(let m = 0; m < json.meshes.length; m++){
         const mesh = json.meshes[m];
-        const color = m == 12 ? [100,64.7,0] : [0,0,0];
+        const color = m == 30 ? [2,2,2] : [0,0,0];
+        // const color = m == 12 ? [100,64.7,0] : [0,0,0];
         for(let i = 0; i < mesh.indices.length; i++){
             let index = mesh.indices[i];
             verts.push([mesh.vertices[index*TRI_SIZE+0], mesh.vertices[index*TRI_SIZE+1], mesh.vertices[index*TRI_SIZE+2]]);
