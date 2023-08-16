@@ -83,7 +83,8 @@ export type RenderPassParams = {
 }
 
 export type ComputePassParams = {
-    constants?: Record<string,number>
+    constants?: Record<string,number>,
+    entry_point?: string
 }
 
 export class RenderPipeline {
@@ -145,7 +146,7 @@ export class ComputePipeline {
             layout: "auto",
             compute: {
                 module: this.shader,
-                entryPoint: "main",
+                entryPoint: params.entry_point || "main",
                 constants: params.constants,
             },
             label: label + " pipeline"

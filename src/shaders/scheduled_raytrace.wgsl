@@ -10,8 +10,33 @@ var<storage, read> bvh_tree: array<BVHNode>;
 @group(0) @binding(3)
 var<storage, read> bvh_triangles: array<Triangle>;
 
+@group(0) @binding(4)
+var<storage, read> ray_queue_in: RayQueue;
+
+@group(0) @binding(5)
+var<storage, read_write> ray_queue_out: AtomicRayQueue;
+
+
+
 var<private> rng_seed: u32 = 0;
 const PI: f32 = 3.14159265358979323846264338;
+
+struct Ray {
+    pos: vec3f,
+    dir: vec3f,
+    dst_ptr: u32,
+    color_attenuation: vec3f,
+}
+
+struct RayQueue {
+    head_ptr: u32,
+    rays: array<Ray>,
+}
+
+struct AtomicRayQueue {
+    head_ptr: atomic<u32>,
+    rays: array<Ray>
+}
 
 struct Settings {
     cam: mat4x4f,
@@ -49,83 +74,64 @@ struct RayIntersect {
 }
 
 override wg_dim: u32;
-override max_bounces: u32;
 
-@compute @workgroup_size(wg_dim, wg_dim)
+@compute @workgroup_size(wg_dim)
 fn main(
     @builtin(global_invocation_id)
     global_id : vec3u,
-
-    @builtin(local_invocation_id)
-    local_id : vec3u,
 ){
-    if(global_id.x >= framebuffer.width || global_id.y >= framebuffer.height){
+    if(global_id.x >= ray_queue_in.head_ptr){
         return;
     }
-    
-    if(settings.dirty == 1){
-        framebuffer.pixels[global_id.x + framebuffer.width * global_id.y] = vec4f(0);
-    }
-    
-    //if((global_id.x / 8 + global_id.y / 8 + settings.frame_count) % 8 != 0){
-    //    return;
-    //}
 
-    seed_rng(global_id.xy);
-
-    var color = vec4f();
-
-    for(var i = 0u; i < settings.sample_count; i++){
-        color += compute_color(global_id.xy);
-    }
+    let ray = ray_queue_in.rays[global_id.x];
     
-    framebuffer.pixels[global_id.x + framebuffer.width * global_id.y] += color;
+    seed_rng(global_id.x);
+
+    framebuffer.pixels[ray.dst_ptr] += compute_color(ray);
 }
 
-fn compute_color(global_id: vec2u) -> vec4f {
-    let x = 2 * (rand_float() + f32(global_id.x)) / f32(framebuffer.width) - 1;
-    let y = 2 * (rand_float() + f32(global_id.y)) / f32(framebuffer.height) - 1;
+fn schedule_ray(ray: Ray) {
+    let idx = atomicAdd(&ray_queue_out.head_ptr, 1);
+    ray_queue_out.rays[idx] = ray;
+}
 
-    let screen_space_vec = vec4f(x*settings.aspect*settings.aspect, y, 1, 0);
-    var out: vec4f = vec4f(0,0,0,1);
-
-
-    var dir = normalize((screen_space_vec * settings.cam).xyz);
-    var pos = settings.pos;
-
+fn compute_color(ray: Ray) -> vec4f {
     var color = vec3f(0,0,0);
-    var absorption = vec3f(1,1,1);
+    let hit = nearest_intersect_bvh(ray.pos, ray.dir);
+    let dir = ray.dir;
+    let pos = ray.pos;
 
-    for(var i = 0u; i < max_bounces; i++){
-        let hit = nearest_intersect_bvh(pos, dir);
-        if(hit.hit) {
-            let tri = bvh_triangles[hit.tri_id];
-            color += absorption * vec3f(tri.emit_r, tri.emit_g, tri.emit_b);
-            var norm = hit.norm;
-            if(dot(norm, dir) > 0){
-                norm = -norm;
-            }
-            pos = pos + dir * hit.dist;
-            if(rand_float() < 0.9) {
-                dir = rand_sphere_hemisphere(norm);
-                absorption *= dot(norm, dir);
-            } else {
-                let h = rand_sphere_hemisphere(norm);
-                let reflect = dir - 2 * norm * dot(norm, dir);
-                let mix = h * 0.03 + reflect;
-                dir = normalize(mix);
-            }
-        } else {
-            color += absorption * vec3f(50) * exp(40*(dir.z - 1));
-            break;
+    if(hit.hit) {
+        let tri = bvh_triangles[hit.tri_id];
+        color += ray.color_attenuation * vec3f(tri.emit_r, tri.emit_g, tri.emit_b);
+
+        var norm = hit.norm;
+        if(dot(norm, dir) > 0){
+            norm = -norm;
         }
+        let next_pos = pos + dir * hit.dist;
+        var next_dir: vec3f;
+        var attenuation = ray.color_attenuation;
+        if(rand_float() < 0.9) {
+            next_dir = rand_sphere_hemisphere(norm);
+            attenuation *= dot(norm, next_dir);
+        } else {
+            let h = rand_sphere_hemisphere(norm);
+            let reflect = dir - 2 * norm * dot(norm, dir);
+            let mix = h * 0.03 + reflect;
+            next_dir = normalize(mix);
+        }
+        schedule_ray(Ray(next_pos, next_dir, ray.dst_ptr, attenuation));
+    } else {
+        color += ray.color_attenuation * vec3f(50) * exp(40*(ray.dir.z - 1));
     }
 
     return vec4f(color, 1);
 }
 
-fn seed_rng(global_id: vec2u) {
-    rng_seed = global_id.x * 4096 + global_id.y * 4096 * 4096 + settings.frame_count;
+fn seed_rng(id: u32) {
+    rng_seed = id * (1 << 8) + settings.frame_count;
 }
 
 fn pcg_hash(input: u32) -> u32 {

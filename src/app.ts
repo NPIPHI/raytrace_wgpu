@@ -5,6 +5,8 @@ import basic_shader_source from "./shaders/forward.wgsl";
 import raytrace_shader_source from "./shaders/raytrace.wgsl";
 import raytrace_blit_shader_source from "./shaders/raytrace_blit.wgsl";
 import debug_bvh_shader_source from "./shaders/bvh_debug.wgsl";
+import scheduled_raytrace_shader_source from "./shaders/scheduled_raytrace.wgsl";
+import scheduler_shader_source from "./shaders/scheduler.wgsl";
 import { Triangle } from "./Triangle";
 import { BVH } from "./BVH";
 
@@ -18,11 +20,15 @@ export class App {
     private blit_pipeline: RenderPipeline;
     private raytrace_pipeline: ComputePipeline;
     private debug_bvh_pipeline: RenderPipeline;
+    private raytrace_scheduler: ComputePipeline;
+    private schedule_executor: ComputePipeline;
 
     private render_bind: GPUBindGroup;
     private blit_bind: GPUBindGroup;
     private raytrace_bind: GPUBindGroup;
     private debug_bvh_bind: GPUBindGroup;
+    private schedule_bind: GPUBindGroup;
+    private execute_binds: GPUBindGroup[];
 
     private fullscreen_tri: GPUBuffer
     private vertex_data: GPUBuffer;
@@ -32,12 +38,15 @@ export class App {
     private bvh_tree_buffer: GPUBuffer;
     private bvh_triangles_buffer: GPUBuffer;
     private debug_bvh_buffer: GPUBuffer;
+    private scheduled_rays_buffers: GPUBuffer[];
 
     private triangle_count: number;
     private frame_count = 0;
     private sample_count = 1;
     private camera_dirty = true;
     private raytrace_dispatch_dim = 8;
+    private ray_execute_width = 64;
+    private max_bounces = 8;
     private last_cam: mat4 = mat4.create();
 
     private width: number;
@@ -75,8 +84,16 @@ export class App {
         }, "debug bvh render");
 
         this.raytrace_pipeline = new ComputePipeline(this.device, raytrace_shader_source, {
-            constants: {wg_dim: this.raytrace_dispatch_dim}
+            constants: {wg_dim: this.raytrace_dispatch_dim, max_bounces: this.max_bounces}
         }, "raytrace shader");
+
+        this.raytrace_scheduler = new ComputePipeline(this.device, scheduler_shader_source, {
+            constants: {wg_dim: this.raytrace_dispatch_dim},
+        }),
+
+        this.schedule_executor = new ComputePipeline(this.device, scheduled_raytrace_shader_source, {
+            constants: {wg_dim: this.ray_execute_width},
+        })
 
         this.make_buffers();
         this.set_triangles([Triangle.default()]);
@@ -153,6 +170,76 @@ export class App {
             ],
             label: "raytrace bind"
         })
+
+        this.execute_binds = []
+        for(let i = 0; i < this.max_bounces; i++){
+            this.execute_binds.push(this.device.createBindGroup({
+                layout: this.schedule_executor.getBindGroup(0),
+                entries: [
+                    {
+                        binding: 0,
+                        resource: {
+                            buffer: this.settings_buffer,
+
+                        }
+                    },{
+                        binding: 1,
+                        resource: {
+                            buffer: this.frame_buffer
+                        }
+                    },
+                    {
+                        binding: 2,
+                        resource: {
+                            buffer: this.bvh_tree_buffer 
+                        }
+                    },
+                    {
+                        binding: 3,
+                        resource: {
+                            buffer: this.bvh_triangles_buffer
+                        }
+                    },
+                    {
+                        binding: 4,
+                        resource: {
+                            buffer: this.scheduled_rays_buffers[i]
+                        }
+                    },
+                    {
+                        binding: 5,
+                        resource: {
+                            buffer: this.scheduled_rays_buffers[i+1]
+                        }
+                    }
+                ],
+                label: "raytrace execute bind"
+            }));
+        }
+
+        this.schedule_bind = this.device.createBindGroup({
+            layout: this.raytrace_scheduler.getBindGroup(0),
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: this.settings_buffer
+                    }
+                },
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: this.frame_buffer
+                    }
+                },
+                {
+                    binding: 2,
+                    resource: {
+                        buffer: this.scheduled_rays_buffers[0]
+                    }
+                }
+            ]
+        })
     }
 
     public set_triangles(tris: Triangle[]){
@@ -225,6 +312,12 @@ export class App {
             label: "frame buffer"
         })
 
+        this.scheduled_rays_buffers = new Array(this.max_bounces+2).fill(0).map(_=>this.device.createBuffer({
+            size: this.width * this.height * 64 + 64,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+            label: "scheduled rays buffer"
+        }));
+
         const fullscreen_data = new Float32Array([
             -1,-1,  0,0,
             -1,3,   0,2,
@@ -253,7 +346,16 @@ export class App {
     }
 
     draw() {
+
+        // const scratch = this.device.createBuffer({
+        //     size: 64,
+        //     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        // })
+
         this.device.queue.writeBuffer(this.settings_buffer, 80, new Uint32Array([this.frame_count, this.camera_dirty?1:0,this.sample_count]));
+        this.scheduled_rays_buffers.forEach(buf=>{
+            this.device.queue.writeBuffer(buf, 0, new Uint32Array([0,0,0,0]));
+        })
         this.frame_count++;
         this.camera_dirty = false;
         // const scissor_point = this.width/2|0;
@@ -265,12 +367,25 @@ export class App {
         const pass1 = encoder.beginComputePass();
         
         pass1.setPipeline(this.raytrace_pipeline.getPipeline());
-        
         pass1.setBindGroup(0, this.raytrace_bind);
-
         pass1.dispatchWorkgroups(Math.ceil(this.width/this.raytrace_dispatch_dim), Math.ceil(this.height/this.raytrace_dispatch_dim));
+        
+        // pass1.setPipeline(this.raytrace_scheduler.getPipeline());
+        // pass1.setBindGroup(0, this.schedule_bind);
+        // pass1.dispatchWorkgroups(Math.ceil(this.width/this.raytrace_dispatch_dim), Math.ceil(this.height/this.raytrace_dispatch_dim));
 
+        // pass1.setPipeline(this.schedule_executor.getPipeline());
+
+        // for(let i = 0; i < this.max_bounces; i++) {
+        //     pass1.setBindGroup(0, this.execute_binds[i]);
+        //     pass1.dispatchWorkgroups(Math.ceil(this.width * this.height / this.ray_execute_width));
+        // }
+        
         pass1.end();
+
+        // for(let i = 0; i < this.scheduled_rays_buffers.length; i++){
+        //     encoder.copyBufferToBuffer(this.scheduled_rays_buffers[i], 0, scratch, i * 4, 4);
+        // }
 
         const pass2 = encoder.beginRenderPass({
             colorAttachments: [
@@ -311,5 +426,10 @@ export class App {
         pass2.end();
 
         this.device.queue.submit([encoder.finish()]);
+
+        // scratch.mapAsync(GPUMapMode.READ).then(()=>{
+        //     const d = scratch.getMappedRange();
+        //     console.log(new Uint32Array(d));
+        // })
     }
 }
